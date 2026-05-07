@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>返洛行李清单同步版</title>
+<style>
+/* 保持原有样式不变，仅做微调 */
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;color:#1a1a1a;font-size:15px;line-height:1.5;padding:1rem 1rem 3rem;background:#f5f5f3}
+button{font-family:inherit;cursor:pointer}
+.card{background:#fff;border-radius:12px;border:0.5px solid rgba(0,0,0,0.08);padding:1rem 1.25rem;margin-bottom:1rem}
+.hero{display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+.countdown{text-align:center;min-width:72px}
+.cd-num{font-size:30px;font-weight:600;line-height:1;color:#534AB7}
+.cd-lbl{font-size:11px;color:#888;margin-top:2px}
+.divider{width:0.5px;height:50px;background:rgba(0,0,0,0.08)}
+.hero-info{flex:1;min-width:160px}
+.hero-title{font-size:15px;font-weight:600}
+.prog-bar{height:6px;background:#f0f0f0;border-radius:5px;margin-top:.6rem;overflow:hidden}
+.prog-fill{height:100%;background:#534AB7;transition:width .4s}
+.prog-lbl{font-size:12px;color:#888;margin-top:4px}
+.sync-bar{display:flex;align-items:center;gap:8px;font-size:12px;color:#888;margin-bottom:.75rem;padding-left:4px}
+.dot{width:8px;height:8px;border-radius:50%;background:#ccc}
+.dot.ok{background:#639922}
+.dot.err{background:#E24B4A}
+.dot.loading{background:#EF9F27;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.section{background:#fff;border-radius:12px;border:0.5px solid rgba(0,0,0,0.08);margin-bottom:.75rem;overflow:hidden}
+.sec-header{display:flex;align-items:center;gap:8px;padding:.75rem 1rem;cursor:pointer}
+.sec-title{font-size:14px;font-weight:600;flex:1}
+.sec-badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#f5f5f3;color:#888}
+.item-row{display:flex;align-items:center;gap:10px;padding:10px 1rem;border-bottom:0.5px solid rgba(0,0,0,0.03)}
+.item-row.checked .item-label{text-decoration:line-through;color:#bbb}
+.chk{width:20px;height:20px;border-radius:6px;border:1.5px solid #ccc;background:none;display:flex;align-items:center;justify-content:center}
+.chk.checked{background:#534AB7;border-color:#534AB7}
+.chk.checked::after{content:'✓';color:#fff;font-size:12px}
+.pdot{width:8px;height:8px;border-radius:50%}
+.p-must{background:#E24B4A}.p-should{background:#EF9F27}.p-nice{background:#639922}
+.item-label{flex:1;font-size:14px}
+.add-row{display:flex;gap:6px;padding:.75rem 1rem;background:#fafafa;border-top:1px solid #eee}
+.add-row input{flex:1;height:32px;padding:0 10px;border:1px solid #ddd;border-radius:6px}
+.btn{height:32px;padding:0 12px;border:none;border-radius:6px;background:#534AB7;color:#fff;font-size:13px}
+.empty{text-align:center;padding:2rem;color:#aaa}
+</style>
+</head>
+<body>
+
+<div class="card hero">
+  <div class="countdown">
+    <div class="cd-num" id="cd-num">...</div>
+    <div class="cd-lbl">距面试结束</div>
+  </div>
+  <div class="divider"></div>
+  <div class="hero-info">
+    <div class="hero-title">5月8日 · 返洛行李清单</div>
+    <div class="prog-bar"><div class="prog-fill" id="prog-fill" style="width:0%"></div></div>
+    <div class="prog-lbl" id="prog-lbl">正在连接云端...</div>
+  </div>
+</div>
+
+<div class="sync-bar">
+  <div class="dot loading" id="sync-dot"></div>
+  <span id="sync-text">同步中...</span>
+</div>
+
+<div id="sections-container"></div>
+
+<script>
+// 使用你提供的新配置
+const URL = 'https://jgldtltrlhkjpahxwnwz.supabase.co/rest/v1';
+const KEY = 'sb_publishable_mLwN2gz-gTgfd1rcdIQMzg_fL1XkMuW';
+const H = {'apikey':KEY,'Authorization':'Bearer '+KEY,'Content-Type':'application/json','Prefer':'return=representation'};
+
+const TARGET = new Date('2025-05-08T18:00:00'); // 假设面试5月8日下午6点结束
+
+const SECTIONS = [
+  {id:'defense', icon:'💾', title:'答辩/面试资料'},
+  {id:'essentials', icon:'👜', title:'核心必备'},
+  {id:'gf', icon:'💄', title:'女朋友的东西'},
+  {id:'clothes', icon:'👕', title:'衣物洗漱'},
+  {id:'other', icon:'📦', title:'其他'}
+];
+
+let items = [];
+
+async function api(method, path, body) {
+    const r = await fetch(URL + path, {method, headers: H, body: body ? JSON.stringify(body) : undefined});
+    if (!r.ok) throw new Error(await r.text());
+    return method === 'DELETE' ? null : await r.json();
+}
+
+async function loadData() {
+    setSyncStatus('loading', '正在同步...');
+    try {
+        const data = await api('GET', '/items?select=*&order=position');
+        items = data;
+        setSyncStatus('ok', '云端已同步');
+        render();
+    } catch (e) {
+        setSyncStatus('err', '同步失败，请检查数据库设置');
+        console.error(e);
+    }
+}
+
+function setSyncStatus(state, text) {
+    document.getElementById('sync-dot').className = 'dot ' + state;
+    document.getElementById('sync-text').textContent = text;
+}
+
+async function toggleItem(id) {
+    const item = items.find(i => i.id === id);
+    const newStatus = !item.checked;
+    item.checked = newStatus;
+    render(); 
+    try {
+        await api('PATCH', `/items?id=eq.${id}`, {checked: newStatus});
+        setSyncStatus('ok', '已更新');
+    } catch (e) { setSyncStatus('err', '更新失败'); }
+}
+
+async function addItem(secId) {
+    const inp = document.getElementById('inp-' + secId);
+    if (!inp.value.trim()) return;
+    const newItem = {
+        id: 'id' + Date.now(),
+        section_id: secId,
+        label: inp.value.trim(),
+        priority: 'should',
+        checked: false,
+        position: items.length
+    };
+    items.push(newItem);
+    render();
+    inp.value = '';
+    try {
+        await api('POST', '/items', [newItem]);
+        setSyncStatus('ok', '已添加');
+    } catch (e) { setSyncStatus('err', '保存失败'); }
+}
+
+async function delItem(id) {
+    items = items.filter(i => i.id !== id);
+    render();
+    try {
+        await api('DELETE', `/items?id=eq.${id}`);
+    } catch (e) { setSyncStatus('err', '删除失败'); }
+}
+
+function updateCountdown() {
+    const diff = TARGET - new Date();
+    const el = document.getElementById('cd-num');
+    if (diff <= 0) { el.textContent = 'DONE'; return; }
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    el.textContent = days > 0 ? days + '天' : hours + 'h';
+}
+
+function render() {
+    updateCountdown();
+    const done = items.filter(i => i.checked).length;
+    document.getElementById('prog-fill').style.width = items.length ? (done/items.length*100)+'%' : '0%';
+    document.getElementById('prog-lbl').textContent = `${done} / ${items.length} 已确认`;
+
+    const container = document.getElementById('sections-container');
+    container.innerHTML = SECTIONS.map(sec => {
+        const secItems = items.filter(i => i.section_id === sec.id);
+        return `
+            <div class="section">
+                <div class="sec-header">
+                    <span>${sec.icon}</span>
+                    <span class="sec-title">${sec.title}</span>
+                    <span class="sec-badge">${secItems.filter(i=>i.checked).length}/${secItems.length}</span>
+                </div>
+                <div class="sec-body">
+                    ${secItems.map(item => `
+                        <div class="item-row ${item.checked?'checked':''}">
+                            <div class="chk ${item.checked?'checked':''}" onclick="toggleItem('${item.id}')"></div>
+                            <span class="item-label">${item.label}</span>
+                            <span style="color:#ccc;cursor:pointer" onclick="delItem('${item.id}')">✕</span>
+                        </div>
+                    `).join('')}
+                    <div class="add-row">
+                        <input id="inp-${sec.id}" placeholder="添加物品...">
+                        <button class="btn" onclick="addItem('${sec.id}')">添加</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+loadData();
+setInterval(updateCountdown, 60000);
+</script>
+</body>
+</html>
